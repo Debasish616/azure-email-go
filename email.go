@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+// Embed the Python executable
+//
 //go:embed azure_email_service_executable/app
 var content embed.FS
 
