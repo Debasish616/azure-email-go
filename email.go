@@ -4,18 +4,21 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // Embed the Python executable
 //
 //go:embed azure_email_service_executable/app
-var content embed.FS
+var embeddedExecutable embed.FS
 
 type EmailService struct {
 	BaseURL string
@@ -25,6 +28,11 @@ type EmailService struct {
 func NewEmailService(connectionString, senderAddress string) (*EmailService, error) {
 	service := &EmailService{
 		BaseURL: "http://localhost:8005",
+	}
+
+	// Ensure no other instance is running
+	if err := killExistingServer(8005); err != nil {
+		return nil, fmt.Errorf("failed to kill existing server: %v", err)
 	}
 
 	// Extract and run the Python executable
@@ -50,8 +58,10 @@ func NewEmailService(connectionString, senderAddress string) (*EmailService, err
 
 	service.cmd = cmd
 
-	// Wait for a few seconds to ensure the service is up
-	time.Sleep(5 * time.Second)
+	// Wait for the Flask server to be ready
+	if err := waitForServer("localhost:8005", 10*time.Second); err != nil {
+		return nil, fmt.Errorf("failed to wait for server: %v", err)
+	}
 
 	return service, nil
 }
@@ -96,7 +106,7 @@ func extractExecutable() (string, error) {
 	}
 
 	exePath := filepath.Join(dir, "app")
-	data, err := content.ReadFile("azure_email_service_executable/app")
+	data, err := embeddedExecutable.ReadFile("azure_email_service_executable/app")
 	if err != nil {
 		return "", err
 	}
@@ -107,4 +117,39 @@ func extractExecutable() (string, error) {
 	}
 
 	return exePath, nil
+}
+
+func killExistingServer(port int) error {
+	cmd := exec.Command("lsof", "-i", fmt.Sprintf(":%d", port))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(output), "\n")
+	if len(lines) > 1 {
+		fields := strings.Fields(lines[1])
+		if len(fields) > 1 {
+			pid := fields[1]
+			killCmd := exec.Command("kill", "-9", pid)
+			if err := killCmd.Run(); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func waitForServer(address string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.Dial("tcp", address)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return errors.New("server did not start in time")
 }
