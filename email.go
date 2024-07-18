@@ -5,7 +5,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,7 +12,7 @@ import (
 	"time"
 )
 
-//go:embed azure_email_service/*
+//go:embed azure_email_service_executable/app
 var content embed.FS
 
 type EmailService struct {
@@ -26,13 +25,13 @@ func NewEmailService(connectionString, senderAddress string) (*EmailService, err
 		BaseURL: "http://localhost:8005",
 	}
 
-	// Extract and run the Python service
-	pythonDir, err := extractPythonService()
+	// Extract and run the Python executable
+	exePath, err := extractExecutable()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract Python service: %v", err)
+		return nil, fmt.Errorf("failed to extract Python executable: %v", err)
 	}
 
-	cmd := exec.Command("python", filepath.Join(pythonDir, "azure_email_service/app.py"))
+	cmd := exec.Command(exePath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -42,9 +41,9 @@ func NewEmailService(connectionString, senderAddress string) (*EmailService, err
 		"SENDER_ADDRESS="+senderAddress,
 	)
 
-	// Start the Python service
+	// Start the Python executable
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start Python service: %v", err)
+		return nil, fmt.Errorf("failed to start Python executable: %v", err)
 	}
 
 	service.cmd = cmd
@@ -88,33 +87,22 @@ func (s *EmailService) Stop() error {
 	return nil
 }
 
-func extractPythonService() (string, error) {
-	dir, err := os.MkdirTemp("", "azure_email_service")
+func extractExecutable() (string, error) {
+	dir, err := os.MkdirTemp("", "azure_email_service_executable")
 	if err != nil {
 		return "", err
 	}
 
-	err = fs.WalkDir(content, "azure_email_service", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	exePath := filepath.Join(dir, "app")
+	data, err := content.ReadFile("azure_email_service_executable/app")
+	if err != nil {
+		return "", err
+	}
 
-		relPath, err := filepath.Rel("azure_email_service", path)
-		if err != nil {
-			return err
-		}
+	err = os.WriteFile(exePath, data, 0755)
+	if err != nil {
+		return "", err
+	}
 
-		if d.IsDir() {
-			return os.MkdirAll(filepath.Join(dir, relPath), 0755)
-		}
-
-		data, err := content.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		return os.WriteFile(filepath.Join(dir, relPath), data, 0644)
-	})
-
-	return dir, err
+	return exePath, nil
 }
